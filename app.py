@@ -1,160 +1,166 @@
-# ============================================
-# CAR PRICE PREDICTION - NEXT LEVEL DASHBOARD
-# ============================================
-
-import streamlit as st
-import numpy as np
-import pandas as pd
-import pickle
 import os
+import streamlit as st
+import pandas as pd
+import numpy as np
+import joblib
 import plotly.express as px
 
-# ============================================
-# PAGE CONFIG (DARK THEME)
-# ============================================
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error, r2_score
 
-st.set_page_config(
-    page_title="Car Price Predictor",
-    page_icon="🚗",
-    layout="wide"
-)
 
-# ============================================
-# LOAD MODEL
-# ============================================
+# -----------------------------
+# PAGE CONFIG
+# -----------------------------
+st.set_page_config(page_title="ML Trainer App", layout="wide")
 
-MODEL_PATH = "model/car_model.pkl"
+st.title("📊 Machine Learning Trainer Dashboard")
 
-if not os.path.exists(MODEL_PATH):
-    st.error("Model not found! Run train_model.py first.")
+
+# -----------------------------
+# FILE UPLOAD
+# -----------------------------
+uploaded_file = st.file_uploader("Upload your CSV file", type=["csv"])
+
+if uploaded_file is None:
+    st.warning("Please upload a CSV file to continue.")
     st.stop()
 
-model = pickle.load(open(MODEL_PATH, "rb"))
+# Load data
+df = pd.read_csv(uploaded_file)
 
-# ============================================
-# CUSTOM DARK STYLE
-# ============================================
+st.success("✅ Data loaded successfully!")
+st.write("### Preview of Data")
+st.dataframe(df.head())
 
-st.markdown("""
-<style>
-body {
-    background-color: #0e1117;
-    color: white;
-}
-.stApp {
-    background-color: #0e1117;
-}
-</style>
-""", unsafe_allow_html=True)
 
-# ============================================
-# HEADER
-# ============================================
+# -----------------------------
+# EDA SECTION
+# -----------------------------
+st.write("## 📊 Exploratory Data Analysis")
 
-st.markdown("""
-# 🚗 Car Price Prediction
-### AI-powered resale value estimator
-""")
+# Numeric columns only (prevents crash)
+numeric_df = df.select_dtypes(include=['number'])
 
-st.markdown("---")
+if not numeric_df.empty:
+    st.write("### Correlation Heatmap")
+    corr = numeric_df.corr()
 
-# ============================================
-# SIDEBAR INPUT
-# ============================================
-
-st.sidebar.header("Car Details")
-
-present_price = st.sidebar.number_input("Showroom Price (Lakhs)", 0.0, 50.0, 5.0)
-kms_driven = st.sidebar.number_input("Kilometers Driven", 0, 500000, 30000)
-owners = st.sidebar.selectbox("Owners", [0, 1, 2, 3])
-car_age = st.sidebar.slider("Car Age", 0, 20, 5)
-
-fuel = st.sidebar.selectbox("Fuel Type", ["Petrol", "Diesel", "CNG"])
-seller = st.sidebar.selectbox("Seller Type", ["Dealer", "Individual"])
-transmission = st.sidebar.selectbox("Transmission", ["Manual", "Automatic"])
-
-# ============================================
-# ENCODING
-# ============================================
-
-fuel_map = {"Petrol": 0, "Diesel": 1, "CNG": 2}
-seller_map = {"Dealer": 0, "Individual": 1}
-trans_map = {"Manual": 0, "Automatic": 1}
-
-fuel = fuel_map[fuel]
-seller = seller_map[seller]
-transmission = trans_map[transmission]
-
-# ============================================
-# PREDICTION + CONFIDENCE
-# ============================================
-
-st.subheader("Prediction")
-
-if st.button("Predict Price"):
-
-    input_data = np.array([[present_price, kms_driven, owners,
-                            fuel, seller, transmission, car_age]])
-
-    prediction = model.predict(input_data)[0]
-
-    # Confidence (approx using tree variance)
-    preds = np.array([tree.predict(input_data)[0] for tree in model.estimators_])
-    confidence = 100 - (np.std(preds) * 10)
-
-    st.success(f"Estimated Price: ₹ {prediction:.2f} Lakhs")
-    st.info(f"Model Confidence: {confidence:.2f}%")
-
-# ============================================
-# DATA VISUALIZATION (PLOTLY)
-# ============================================
-
-st.markdown("---")
-st.subheader("Market Insights")
-
-DATA_PATH = "car_data.csv"
-
-if os.path.exists(DATA_PATH):
-
-    df = pd.read_csv(DATA_PATH)
-
-    col1, col2 = st.columns(2)
-
-    # Interactive histogram
-    with col1:
-        fig = px.histogram(df, x="Selling_Price", title="Price Distribution")
-        st.plotly_chart(fig, use_container_width=True)
-
-    # Interactive scatter
-    with col2:
-        fig = px.scatter(df, x="Kms_Driven", y="Selling_Price",
-                         title="Price vs Distance")
-        st.plotly_chart(fig, use_container_width=True)
-
-    # Fuel analysis
-    st.subheader("Fuel Type Analysis")
-
-    fuel_avg = df.groupby("Fuel_Type")["Selling_Price"].mean().reset_index()
-
-    fig = px.bar(fuel_avg, x="Fuel_Type", y="Selling_Price",
-                 title="Average Price by Fuel Type")
-
+    fig = px.imshow(
+        corr,
+        text_auto=True,
+        color_continuous_scale="RdBu_r",
+        title="Correlation Heatmap"
+    )
     st.plotly_chart(fig, use_container_width=True)
 
+    st.write("### Histograms")
+    for col in numeric_df.columns:
+        fig = px.histogram(df, x=col, title=f"{col} Distribution")
+        st.plotly_chart(fig, use_container_width=True)
 else:
-    st.warning("Dataset not found")
+    st.warning("No numeric columns available for EDA.")
 
-# ============================================
-# PORTFOLIO FOOTER
-# ============================================
 
-st.markdown("---")
-st.markdown("""
-### About This Project
-- Machine Learning model using Random Forest
-- Hyperparameter tuning applied
-- Interactive dashboard with Plotly
-- Built for real-world resale price prediction
+# -----------------------------
+# TARGET COLUMN SELECTION
+# -----------------------------
+st.write("## 🎯 Select Target Column")
 
-**Created by:** Your Name  
-""")
+target_column = st.selectbox(
+    "Choose the column you want to predict",
+    df.columns
+)
+
+if target_column is None:
+    st.stop()
+
+
+# -----------------------------
+# PREPROCESSING
+# -----------------------------
+def preprocess_data(df, target_column):
+    df = df.copy()
+
+    # Drop missing target
+    df = df.dropna(subset=[target_column])
+
+    # Fill numeric NaN
+    for col in df.select_dtypes(include='number').columns:
+        df[col] = df[col].fillna(df[col].median())
+
+    # Encode categorical
+    encoders = {}
+    for col in df.select_dtypes(include=['object']).columns:
+        le = LabelEncoder()
+        df[col] = df[col].astype(str)
+        df[col] = le.fit_transform(df[col])
+        encoders[col] = le
+
+    return df, encoders
+
+
+# -----------------------------
+# TRAIN BUTTON
+# -----------------------------
+if st.button("🚀 Train Model"):
+
+    df_processed, encoders = preprocess_data(df, target_column)
+
+    X = df_processed.drop(columns=[target_column])
+    y = df_processed[target_column]
+
+    if X.shape[1] == 0:
+        st.error("❌ No features available for training.")
+        st.stop()
+
+    # Split
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42
+    )
+
+    # Train
+    model = LinearRegression()
+    model.fit(X_train, y_train)
+
+    # Predict
+    y_pred = model.predict(X_test)
+
+    # Metrics
+    mse = mean_squared_error(y_test, y_pred)
+    r2 = r2_score(y_test, y_pred)
+
+    st.success("✅ Model trained successfully!")
+
+    st.write("### 📈 Model Performance")
+    st.write(f"**MSE:** {mse:.4f}")
+    st.write(f"**R² Score:** {r2:.4f}")
+
+    # -----------------------------
+    # SAVE MODEL
+    # -----------------------------
+    os.makedirs("outputs", exist_ok=True)
+
+    joblib.dump(model, "outputs/model.pkl")
+    joblib.dump(encoders, "outputs/encoders.pkl")
+
+    st.info("💾 Model saved to outputs/model.pkl")
+
+    # -----------------------------
+    # DOWNLOAD BUTTONS
+    # -----------------------------
+    with open("outputs/model.pkl", "rb") as f:
+        st.download_button(
+            label="⬇️ Download Model",
+            data=f,
+            file_name="model.pkl"
+        )
+
+    with open("outputs/encoders.pkl", "rb") as f:
+        st.download_button(
+            label="⬇️ Download Encoders",
+            data=f,
+            file_name="encoders.pkl"
+        )
